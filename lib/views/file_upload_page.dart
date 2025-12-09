@@ -2,7 +2,10 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import '../api/upload_file.dart';
+import '../services/training_record_service.dart';
+import '../models/training_record.dart';
 import 'dart:developer' as developer;
 
 class FileUploadPage extends StatefulWidget {
@@ -333,6 +336,89 @@ class _FileUploadPageState extends State<FileUploadPage> {
   }
 
   Future<void> _pickFiles() async {
+    // 在 iOS 上显示选择对话框
+    if (Platform.isIOS) {
+      final source = await _showSourceSelectionDialog();
+      if (source == null) return;
+      
+      if (source == 'photo_library') {
+        await _pickVideoFromPhotoLibrary();
+      } else {
+        await _pickFilesFromFileSystem();
+      }
+    } else {
+      // Android 和其他平台直接使用文件选择器
+      await _pickFilesFromFileSystem();
+    }
+  }
+
+  Future<String?> _showSourceSelectionDialog() async {
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('选择视频来源'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Color(0xFF3B82F6)),
+                title: const Text('从照片库选择'),
+                onTap: () => Navigator.of(context).pop('photo_library'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder, color: Color(0xFF3B82F6)),
+                title: const Text('从文件选择'),
+                onTap: () => Navigator.of(context).pop('file_system'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _pickVideoFromPhotoLibrary() async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? video = await picker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(minutes: 30), // 最大30分钟的视频
+      );
+
+      if (video != null) {
+        developer.log('从照片库选择视频: ${video.name}, 路径: ${video.path}');
+        
+        // 创建上传文件项
+        final uploadFile = UploadFileItem(
+          fileName: video.name.isNotEmpty ? video.name : 'video_${DateTime.now().millisecondsSinceEpoch}.mp4',
+          filePath: video.path,
+          status: UploadStatus.pending,
+          videoFormat: "",
+          videoId: "",
+          progress: 0.0,
+        );
+        
+        setState(() {
+          _uploadFiles.add(uploadFile);
+        });
+        
+        // 使用新的上传方法
+        _uploadFile(uploadFile);
+      }
+    } catch (e) {
+      developer.log('从照片库选择视频失败: $e');
+      _showErrorSnackBar('选择视频失败: $e');
+    }
+  }
+
+  Future<void> _pickFilesFromFileSystem() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         allowMultiple: false,
@@ -390,6 +476,12 @@ class _FileUploadPageState extends State<FileUploadPage> {
         return;
       }
 
+      // 保存 videoId 到 file 对象中
+      if (blobData['video_id'] != null) {
+        file.videoId = blobData['video_id'].toString();
+        developer.log('保存 videoId: ${file.videoId}');
+      }
+
       // 2. 使用SAS URL直接上传文件到Azure Blob Storage
       final success = await ApiUploadFile.uploadFileToBlob(
         blobData['sas_url'],
@@ -401,41 +493,70 @@ class _FileUploadPageState extends State<FileUploadPage> {
         },
       );
 
-      setState(() async{
-        if (success) {
+      if (success) {
+        setState(() {
           file.status = UploadStatus.completed;
-          developer.log('文件上传成功: ${file.fileName}');
-          await ApiUploadFile.savedVideo(blobData['video_id'], ext);
-          
-            // 每25秒调用一次getAnalysis接口，直到status_message是100%
-            // 记录开始时间
-            final startTime = DateTime.now();
-            Timer.periodic(const Duration(seconds: 25), (timer) async {
-              try {
-                // 检查是否超过5分钟
-                final elapsed = DateTime.now().difference(startTime);
-                if (elapsed.inMinutes >= 5) {
-                  timer.cancel();
-                  developer.log('分析超时，已停止检查: ${file.videoId}');
-                  return;
-                }
+          _isUploading = _uploadFiles.any((f) => f.status == UploadStatus.uploading);
+        });
+        
+        developer.log('文件上传成功: ${file.fileName}, videoId: ${file.videoId}');
+        
+        // 调用 savedVideo
+        await ApiUploadFile.savedVideo(file.videoId, ext);
+        
+        // 每25秒调用一次getAnalysis接口，直到status为completed
+        // 记录开始时间
+        final startTime = DateTime.now();
+        Timer.periodic(const Duration(seconds: 25), (timer) async {
+          try {
+            // 检查是否超过5分钟
+            final elapsed = DateTime.now().difference(startTime);
+            if (elapsed.inMinutes >= 5) {
+              timer.cancel();
+              developer.log('分析超时，已停止检查: ${file.videoId}');
+              return;
+            }
+            
+            developer.log('检查分析结果，videoId: ${file.videoId}');
+            final analysisResult = await ApiUploadFile.getAnalysis(file.videoId);
+            if (analysisResult != null && analysisResult['status'] == 'completed') {
+              timer.cancel();
+              developer.log('分析完成: ${file.videoId}, status: ${analysisResult['status']}');
+              
+              // 获取 result_sas_url 并保存训练记录
+              if (analysisResult['result_sas_url'] != null) {
+                final resultSasUrl = analysisResult['result_sas_url'] as String;
+                final record = TrainingRecord(
+                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                  videoId: file.videoId,
+                  resultSasUrl: resultSasUrl,
+                  fileName: file.fileName,
+                  createdAt: DateTime.now(),
+                );
                 
-                final analysisResult = await ApiUploadFile.getAnalysis(file.videoId);
-                if (analysisResult != null && analysisResult['status_message'] == '100%') {
-                  timer.cancel();
-                  developer.log('分析完成: ${file.videoId}');
+                try {
+                  await TrainingRecordService.saveRecord(record);
+                  developer.log('训练记录已保存: ${record.id}, result_sas_url: $resultSasUrl');
+                } catch (e) {
+                  developer.log('保存训练记录失败: $e');
                 }
-              } catch (e) {
-                developer.log('获取分析结果失败: $e');
+              } else {
+                developer.log('分析结果中未找到 result_sas_url');
               }
-            });
-
-        } else {
+            } else if (analysisResult != null) {
+              developer.log('分析进行中，当前status: ${analysisResult['status']}');
+            }
+          } catch (e) {
+            developer.log('获取分析结果失败: $e');
+          }
+        });
+      } else {
+        setState(() {
           file.status = UploadStatus.failed;
-          developer.log('文件上传失败: ${file.fileName}');
-        }
-        _isUploading = _uploadFiles.any((f) => f.status == UploadStatus.uploading);
-      });
+          _isUploading = _uploadFiles.any((f) => f.status == UploadStatus.uploading);
+        });
+        developer.log('文件上传失败: ${file.fileName}');
+      }
     } catch (e) {
       setState(() {
         file.status = UploadStatus.failed;

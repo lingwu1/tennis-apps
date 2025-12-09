@@ -49,5 +49,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要访问您的照片库以选择视频文件进行上传</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要访问您的照片库以选择视频文件进行上传</string>
 </dict>
 </plist>

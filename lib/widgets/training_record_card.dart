@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+import 'dart:developer' as developer;
+import '../models/training_record.dart';
 
 class TrainingRecordCard extends StatefulWidget {
-  const TrainingRecordCard({super.key});
+  final TrainingRecord record;
+  
+  const TrainingRecordCard({
+    super.key,
+    required this.record,
+  });
 
   @override
   State<TrainingRecordCard> createState() => _TrainingRecordCardState();
@@ -16,20 +23,25 @@ class _TrainingRecordCardState extends State<TrainingRecordCard> {
   @override
   void initState() {
     super.initState();
-    // Initialize video player with a sample video
-    // In a real app, you would load the actual video file
+    // Initialize video player with result_sas_url
     _initializeVideo();
   }
 
   void _initializeVideo() {
-    // For demo purposes, we'll use a placeholder
-    // In a real app, you would load the actual video file
-    _controller = VideoPlayerController.networkUrl(
-      Uri.parse('https://cesium.com/public/SandcastleSampleData/big-buck-bunny_trailer.mp4'),
-    );
-    _controller!.initialize().then((_) {
-      setState(() {});
-    });
+    // 使用 result_sas_url 初始化视频播放器
+    if (widget.record.resultSasUrl.isNotEmpty) {
+      _controller = VideoPlayerController.networkUrl(
+        Uri.parse(widget.record.resultSasUrl),
+      );
+      _controller!.initialize().then((_) {
+        if (mounted) {
+          setState(() {});
+        }
+      }).catchError((error) {
+        // 如果视频加载失败，不显示播放器
+        developer.log('视频加载失败: $error');
+      });
+    }
   }
 
   @override
@@ -62,9 +74,9 @@ class _TrainingRecordCardState extends State<TrainingRecordCard> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Jul 23, 2025 13:25',
-                  style: TextStyle(
+                Text(
+                  _formatDate(widget.record.createdAt),
+                  style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFF666666),
                     fontWeight: FontWeight.w500,
@@ -78,9 +90,9 @@ class _TrainingRecordCardState extends State<TrainingRecordCard> {
                       color: Color(0xFF666666),
                     ),
                     const SizedBox(width: 4),
-                    const Text(
-                      '00:03',
-                      style: TextStyle(
+                    Text(
+                      _formatTime(widget.record.createdAt),
+                      style: const TextStyle(
                         fontSize: 12,
                         color: Color(0xFF666666),
                         fontWeight: FontWeight.w500,
@@ -98,14 +110,16 @@ class _TrainingRecordCardState extends State<TrainingRecordCard> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Record - Serve Progressions',
-                    style: TextStyle(
+                    widget.record.fileName,
+                    style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF1A1A1A),
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const Icon(
@@ -253,5 +267,17 @@ class _TrainingRecordCardState extends State<TrainingRecordCard> {
   void _handleUpload() {
     HapticFeedback.lightImpact();
     Navigator.pushNamed(context, '/upload');
+  }
+
+  String _formatDate(DateTime date) {
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  String _formatTime(DateTime date) {
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 }
